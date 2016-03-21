@@ -31,6 +31,7 @@ function (angular, $, moment, _, kbn, GraphTooltip) {
         var sortedSeries;
         var legendSideLastValue = null;
         var rootScope = scope.$root;
+        var oneDay = 86400000;
 
         rootScope.onAppEvent('setCrosshair', function(event, info) {
           // do not need to to this if event is from this panel
@@ -278,9 +279,10 @@ function (angular, $, moment, _, kbn, GraphTooltip) {
         }
 
         function addTimeAxis(options) {
-          var ticks = elem.width() / 100;
+          var ticks = elem.width() / 110;
           var min = _.isUndefined(ctrl.range.from) ? null : ctrl.range.from.valueOf();
           var max = _.isUndefined(ctrl.range.to) ? null : ctrl.range.to.valueOf();
+          var period = max - min;
 
           options.xaxis = {
             timezone: dashboard.timezone,
@@ -291,7 +293,50 @@ function (angular, $, moment, _, kbn, GraphTooltip) {
             label: "Datetime",
             ticks: ticks,
             timeformat: time_format(ticks, min, max),
+            first: min + (period / ticks) * 2,
+            showdate: period <= oneDay,
+            tickFormatter: tickFormatter
           };
+        }
+
+        function makeUtcWrapper(d) {
+          function addProxyMethod(sourceObj, sourceMethod, targetObj, targetMethod) {
+            sourceObj[sourceMethod] = function() {
+              return targetObj[targetMethod].apply(targetObj, arguments);
+            };
+          }
+          var utc = { date: d };
+          if (d.strftime !== undefined) {
+            addProxyMethod(utc, "strftime", d, "strftime");
+          }
+          addProxyMethod(utc, "getTime", d, "getTime");
+          addProxyMethod(utc, "setTime", d, "setTime");
+
+          var props = ["Date", "Day", "FullYear", "Hours", "Milliseconds", "Minutes", "Month", "Seconds"];
+          for (var p = 0; p < props.length; p++) {
+            addProxyMethod(utc, "get" + props[p], d, "getUTC" + props[p]);
+            addProxyMethod(utc, "set" + props[p], d, "setUTC" + props[p]);
+          }
+          return utc;
+        }
+
+        function tickFormatter(v, axis) {
+          var d = (axis.options.timezone === "browser")?(new Date(v)):makeUtcWrapper(new Date(v));
+          var timeformat = axis.options.timeformat;
+          if (axis.options.showdate) {
+            if (v >= axis.options.min) {
+              if (v < axis.options.first) {
+                timeformat = '%d.%m %H:%M';
+                axis.options.first = 0;
+              } else {
+                var tzOneHour = 60000;
+                if ((v - (d.getTimezoneOffset?(d.getTimezoneOffset() * tzOneHour):0)) % oneDay === 0) {
+                  timeformat = '%d.%m %H:%M';
+                }
+              }
+            }
+          }
+          return $.plot.formatDate(d, timeformat, axis.options.monthNames, axis.options.dayNames);
         }
 
         function addGridThresholds(options, panel) {
@@ -423,7 +468,6 @@ function (angular, $, moment, _, kbn, GraphTooltip) {
           if (min && max && ticks) {
             var range = max - min;
             var secPerTick = (range/ticks) / 1000;
-            var oneDay = 86400000;
             var oneYear = 31536000000;
 
             if (secPerTick <= 45) {
@@ -433,12 +477,12 @@ function (angular, $, moment, _, kbn, GraphTooltip) {
               return "%H:%M";
             }
             if (secPerTick <= 80000) {
-              return "%m/%d %H:%M";
+              return "%d.%m %H:%M";
             }
             if (secPerTick <= 2419200 || range <= oneYear) {
-              return "%m/%d";
+              return "%d.%m";
             }
-            return "%Y-%m";
+            return "%m.%Y";
           }
 
           return "%H:%M";
